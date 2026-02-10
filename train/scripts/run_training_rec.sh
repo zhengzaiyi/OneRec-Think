@@ -3,16 +3,17 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}/.."
 
-MODEL_DIR="../basemodel/merged_beauty_model_1-1"
+MODEL_DIR="../basemodel/Qwen3-1-7B-expand"
 TRAIN_DATA="../data/training_prediction_sid_data_train.parquet"
 VAL_DATA="../data/training_prediction_sid_data_val.parquet"
 
 USE_LORA=false
 
+GPU_IDS="0,2,3,4,5"
+
 DEEPSPEED_CMD=(
     deepspeed
-    --hostfile=./scripts/hostfile
-    --num_gpus 8
+    --include "localhost:${GPU_IDS}"
     ./scripts/train_beauty_sid_rec.py
     --model_name_or_path "${MODEL_DIR}"
     --train_data_path "${TRAIN_DATA}"
@@ -59,4 +60,4 @@ DEEPSPEED_CMD+=(
     --remove_unused_columns False
 )
 
-nohup "${DEEPSPEED_CMD[@]}" >> beauty_sid_rec.log 2>&1 &
+"${DEEPSPEED_CMD[@]}"

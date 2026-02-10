@@ -2,9 +2,16 @@
 
 # Usage: ./eval_parallel_8gpu.sh [EXTRA_ARGS]
 
-echo "🚀 Starting 8-GPU Parallel Evaluation..."
+# ============ GPU Configuration ============
+GPU_IDS=(0 2 3 4 5)  # Modify this to specify GPUs
+# ===========================================
 
-MERGED_MODEL_PATH="../train/results/beauty_sid_rec/checkpoint-8388"
+NUM_GPUS=${#GPU_IDS[@]}
+
+echo "🚀 Starting ${NUM_GPUS}-GPU Parallel Evaluation..."
+echo "📌 Using GPUs: ${GPU_IDS[*]}"
+
+MERGED_MODEL_PATH="../train/results/beauty_sid_rec"
 ADDITIONAL_LORA_PATH=""
 TEST_PARQUET="../data/training_prediction_sid_data_test.parquet"
 GLOBAL_TRIE_FILE="./exact_trie.pkl"
@@ -17,7 +24,7 @@ echo "📝 Log directory: $LOG_DIR"
 echo "⏰ Started at: $(date)"
 
 TOTAL_SAMPLES=22363
-SAMPLES_PER_GPU=$((TOTAL_SAMPLES / 8))
+SAMPLES_PER_GPU=$((TOTAL_SAMPLES / NUM_GPUS))
 BATCH_SIZE=4
 NUM_BEAMS=10
 MAX_TOKENS=6
@@ -34,7 +41,7 @@ else
     echo "✅ Exact trie already exists: $GLOBAL_TRIE_FILE"
 fi
 
-echo "📊 8-GPU Parallel Configuration:"
+echo "📊 ${NUM_GPUS}-GPU Parallel Configuration:"
 echo "  Merged model: $MERGED_MODEL_PATH"
 echo "  Additional LoRA: $ADDITIONAL_LORA_PATH"
 echo "  Exact trie: $GLOBAL_TRIE_FILE"
@@ -50,11 +57,12 @@ export TOKENIZERS_PARALLELISM=false
 export OMP_NUM_THREADS=4
 
 pids=()
-for gpu_id in {0..7}; do
-    offset=$((gpu_id * SAMPLES_PER_GPU))
-    log_file="${LOG_DIR}/gpu_${gpu_id}.log"
+for i in "${!GPU_IDS[@]}"; do
+    gpu_id=${GPU_IDS[$i]}
+    offset=$((i * SAMPLES_PER_GPU))
+    log_file="${LOG_DIR}/gpu_${i}.log"
     
-    echo "🔄 Starting GPU $gpu_id: samples $offset-$((offset + SAMPLES_PER_GPU - 1))"
+    echo "🔄 Starting GPU $gpu_id (worker $i): samples $offset-$((offset + SAMPLES_PER_GPU - 1))"
 
     CUDA_VISIBLE_DEVICES=$gpu_id nohup python3 -u test_model_hitrate.py \
         --merged_model_path "${MERGED_MODEL_PATH}" \
@@ -71,7 +79,7 @@ for gpu_id in {0..7}; do
         --print_generations \
         --sample_num ${SAMPLES_PER_GPU} \
         --sample_offset ${offset} \
-        --gpu_id ${gpu_id} \
+        --gpu_id ${i} \
         --log_file "$log_file" \
         "$@" > "$log_file" 2>&1 &
 
@@ -80,9 +88,9 @@ for gpu_id in {0..7}; do
 done
 
 echo ""
-echo "🔄 All 8 processes started:"
-for i in {0..7}; do
-    echo "  GPU $i: PID ${pids[$i]} -> ${LOG_DIR}/gpu_${i}.log"
+echo "🔄 All ${NUM_GPUS} processes started:"
+for i in "${!GPU_IDS[@]}"; do
+    echo "  GPU ${GPU_IDS[$i]} (worker $i): PID ${pids[$i]} -> ${LOG_DIR}/gpu_${i}.log"
 done
 
 echo ""
@@ -107,19 +115,20 @@ import os
 from glob import glob
 
 log_dir = '${LOG_DIR}'
+num_gpus = ${NUM_GPUS}
 metrics = ['hit@1', 'hit@5', 'hit@10', 'ndcg@5', 'ndcg@10']
 total_metrics = {m: 0.0 for m in metrics}
 total_samples = 0
 
 summary_log = f'{log_dir}/summary_results.log'
 with open(summary_log, 'w', encoding='utf-8') as f:
-    f.write('🔍 8-GPU Parallel Evaluation Summary\\n')
+    f.write(f'🔍 {num_gpus}-GPU Parallel Evaluation Summary\\n')
     f.write('=' * 60 + '\\n')
     f.write(f'Timestamp: $(date)\\n')
     f.write(f'Log directory: {log_dir}\\n\\n')
 
     found_gpus = 0
-    for gpu_id in range(8):
+    for gpu_id in range(num_gpus):
         log_file = f'{log_dir}/gpu_{gpu_id}.log'
         if os.path.exists(log_file):
             with open(log_file, 'r', encoding='utf-8', errors='ignore') as gpu_f:
@@ -159,7 +168,7 @@ with open(summary_log, 'w', encoding='utf-8') as f:
             f.write(f'{metric:>10}: {value:.4f}\\n')
         f.write('=' * 60 + '\\n')
         f.write(f'Total samples: {total_samples}\\n')
-        f.write(f'Completed GPUs: {found_gpus}/8\\n')
+        f.write(f'Completed GPUs: {found_gpus}/{num_gpus}\\n')
         f.write('✅ Evaluation completed successfully!\\n')
 
     else:

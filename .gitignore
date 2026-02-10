@@ -1,0 +1,7 @@
+*logs*/
+*.pkl
+.vscode/
+basemodel/
+*.parquet
+*results/
+*.log

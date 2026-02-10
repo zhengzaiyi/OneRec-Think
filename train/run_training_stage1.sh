@@ -7,16 +7,16 @@ MODEL_DIR="../basemodel/Qwen3-1-7B-expand"
 TRAIN_DATA="../data/training_align_data_train.parquet"
 VAL_DATA="../data/training_align_data_val.parquet"
 
-nohup deepspeed --hostfile=./scripts/hostfile \
-    --num_gpus 8 ./scripts/train_beauty_align.py \
+deepspeed --num_gpus 6 ./scripts/train_beauty_align.py \
     --model_dir "${MODEL_DIR}" \
     --train_data_path "${TRAIN_DATA}" \
     --val_data_path "${VAL_DATA}" \
-    --per_device_train_batch_size 8 \
+    --per_device_train_batch_size 2 \
+    --gradient_accumulation_steps 4 \
     --num_train_epochs 15 \
     --gradient_checkpointing True \
     --bf16 True \
-    --deepspeed ./scripts/ds_config_zero2.json \
+    --deepspeed ./scripts/ds_config_zero3_offload.json \
     --output_dir ./results/beauty_align \
     --logging_dir ./logs/beauty_sid_align \
     --logging_steps 10 \
@@ -36,4 +36,4 @@ nohup deepspeed --hostfile=./scripts/hostfile \
     --adam_epsilon 1e-8 \
     --max_grad_norm 1.0 \
     --dataloader_num_workers 4 \
-    --remove_unused_columns False >> beauty_align.log 2>&1 &
+    --remove_unused_columns False

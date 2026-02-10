@@ -32,6 +32,7 @@ class ModelArguments:
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj", 
         metadata={"help": "LoRA target modules"}
     )
+    softcot_mode: str = field(default="none", metadata={"help": "SoftCoT mode"})
 
 
 @dataclass
@@ -39,7 +40,7 @@ class DataArguments:
     train_data_path: str = "../data/training_prediction_sid_data_train.parquet"
     val_data_path: str = "../data/training_prediction_sid_data_val.parquet"
 
-def prepare_chat_dataset(data_path, sample_size=None, local_rank=0):
+def prepare_chat_dataset(data_path, sample_size=None, local_rank=0, model_args=None):
     if local_rank == 0:
         print(f"Loading parquet file: {data_path}")
     data_pq = pd.read_parquet(data_path)
@@ -57,7 +58,10 @@ def prepare_chat_dataset(data_path, sample_size=None, local_rank=0):
     system_message = "You are a professional recommendation expert who needs to recommend the next possible purchase for users based on their purchase history. Please predict the most likely next product that the user will purchase based on the user's historical purchase information."
     
     for _, row in data_pq.iterrows():
-        assistant_content = f"<think>\n\n</think>\n{row['groundtruth']}"
+        if model_args.softcot_mode == "pause":
+            assistant_content = f"{'<|thought|>' * 5}\n{row['groundtruth']}"
+        else:
+            assistant_content = f"\n{row['groundtruth']}"
 
         formatted_text = f"""<|im_start|>system
 {system_message}<|im_end|>
@@ -107,6 +111,18 @@ def get_special_tokens():
             special_tokens.append(f'<{prefix}_{i}>')
     
     return special_tokens
+
+
+def add_special_token(tokenizer, model, token, local_rank=0):
+    """添加 token 到词汇表末尾"""
+    num_added = tokenizer.add_special_tokens(
+        {"additional_special_tokens": [token]},
+        replace_additional_special_tokens=False
+    )
+    if num_added > 0:
+        model.resize_token_embeddings(len(tokenizer))
+        if local_rank == 0:
+            print(f"Added {token} token, new vocab size: {len(tokenizer)}")
 
 class CustomDataCollator:
     def __init__(self, tokenizer, mlm=False):
@@ -198,6 +214,9 @@ if __name__ == "__main__":
         print(f"Tokenizer vocab size: {tokenizer.vocab_size}")
 
     special_tokens = get_special_tokens()
+    if model_args.softcot_mode == "pause":
+        add_special_token(tokenizer, model, '<|thought|>', local_rank=training_args.local_rank)
+        special_tokens.append('<|thought|>')
     if training_args.local_rank == 0:
         print(f"Total special tokens: {len(special_tokens)}")
 
@@ -241,13 +260,13 @@ if __name__ == "__main__":
     if training_args.local_rank == 0:
         print("\\nLoading training dataset...")
 
-    train_dataset = prepare_chat_dataset(train_data_path, local_rank=training_args.local_rank)
+    train_dataset = prepare_chat_dataset(train_data_path, local_rank=training_args.local_rank, model_args=model_args)
     if training_args.local_rank == 0:
         print(f"Loaded raw train dataset, total samples: {len(train_dataset)}")
 
     if training_args.local_rank == 0:
         print("\\nLoading validation dataset...")
-    val_dataset = prepare_chat_dataset(val_data_path, local_rank=training_args.local_rank)
+    val_dataset = prepare_chat_dataset(val_data_path, local_rank=training_args.local_rank, model_args=model_args)
     if training_args.local_rank == 0:
         print(f"Loaded raw validation dataset, total samples: {len(val_dataset)}")
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
+import torch
 from datasets import Dataset
 from peft import TrainableTokensConfig, get_peft_model
 from transformers import (
@@ -103,7 +104,10 @@ if __name__ == "__main__":
 
     print(f"Loading model from: {model_dir}")
 
-    model = AutoModelForCausalLM.from_pretrained(model_dir)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_dir,
+        torch_dtype=torch.bfloat16
+    )
     tokenizer = AutoTokenizer.from_pretrained(model_dir)
     tokenizer.pad_token = tokenizer.eos_token
     

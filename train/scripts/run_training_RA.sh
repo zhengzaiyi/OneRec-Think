@@ -29,8 +29,7 @@ do
     echo "--> Model Path: ${CURRENT_MODEL_PATH}" >> ${LOG_FILE}
     echo "--> Data Path: ${CURRENT_DATA_PATH}" >> ${LOG_FILE}
 
-    deepspeed --hostfile=./scripts/hostfile \
-        --num_gpus $NUM_GPUS ./scripts/train_beauty_RA.py \
+    deepspeed --num_gpus $NUM_GPUS ./scripts/train_beauty_RA.py \
         --model_name_or_path ${CURRENT_MODEL_PATH} \
         --use_lora False \
         --per_device_train_batch_size 2 \

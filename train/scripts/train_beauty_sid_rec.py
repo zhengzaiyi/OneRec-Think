@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,11 @@ from transformers import (
     TrainingArguments,
 )
 
+# Add project root so that ``from ImpCoT ...`` works regardless of cwd
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+from ImpCoT import pause as imp_pause
+from ImpCoT import coconut as imp_coconut
+
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(
@@ -32,7 +38,8 @@ class ModelArguments:
         default="q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj", 
         metadata={"help": "LoRA target modules"}
     )
-    softcot_mode: str = field(default="none", metadata={"help": "SoftCoT mode"})
+    impcot_mode: str = field(default="none", metadata={"help": "ImpCoT mode: none, pause, coconut"})
+    num_thoughts: int = field(default=5, metadata={"help": "Number of thought tokens (pause / coconut)"})
 
 
 @dataclass
@@ -58,8 +65,10 @@ def prepare_chat_dataset(data_path, sample_size=None, local_rank=0, model_args=N
     system_message = "You are a professional recommendation expert who needs to recommend the next possible purchase for users based on their purchase history. Please predict the most likely next product that the user will purchase based on the user's historical purchase information."
     
     for _, row in data_pq.iterrows():
-        if model_args.softcot_mode == "pause":
-            assistant_content = f"{'<|thought|>' * 5}\n{row['groundtruth']}"
+        if model_args.impcot_mode == "pause":
+            assistant_content = imp_pause.format_response(row['groundtruth'], model_args.num_thoughts)
+        elif model_args.impcot_mode == "coconut":
+            assistant_content = imp_coconut.format_response(row['groundtruth'], model_args.num_thoughts)
         else:
             assistant_content = f"\n{row['groundtruth']}"
 
@@ -112,17 +121,6 @@ def get_special_tokens():
     
     return special_tokens
 
-
-def add_special_token(tokenizer, model, token, local_rank=0):
-    """添加 token 到词汇表末尾"""
-    num_added = tokenizer.add_special_tokens(
-        {"additional_special_tokens": [token]},
-        replace_additional_special_tokens=False
-    )
-    if num_added > 0:
-        model.resize_token_embeddings(len(tokenizer))
-        if local_rank == 0:
-            print(f"Added {token} token, new vocab size: {len(tokenizer)}")
 
 class CustomDataCollator:
     def __init__(self, tokenizer, mlm=False):
@@ -214,9 +212,13 @@ if __name__ == "__main__":
         print(f"Tokenizer vocab size: {tokenizer.vocab_size}")
 
     special_tokens = get_special_tokens()
-    if model_args.softcot_mode == "pause":
-        add_special_token(tokenizer, model, '<|thought|>', local_rank=training_args.local_rank)
-        special_tokens.append('<|thought|>')
+    coconut_token_ids = None
+    if model_args.impcot_mode == "pause":
+        imp_pause.setup(tokenizer, model, local_rank=training_args.local_rank)
+        special_tokens.append(imp_pause.PAUSE_TOKEN)
+    elif model_args.impcot_mode == "coconut":
+        coconut_token_ids = imp_coconut.setup(tokenizer, model, local_rank=training_args.local_rank)
+        special_tokens.extend([imp_coconut.BOT_TOKEN, imp_coconut.THOUGHT_TOKEN, imp_coconut.EOT_TOKEN])
     if training_args.local_rank == 0:
         print(f"Total special tokens: {len(special_tokens)}")
 
@@ -297,14 +299,25 @@ if __name__ == "__main__":
         mlm=False,
     )
 
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=train_dataset,
-        eval_dataset=val_dataset,
-        data_collator=data_collator,
-        callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
-    )
+    if model_args.impcot_mode == "coconut":
+        trainer = imp_coconut.CoconutTrainer(
+            coconut_token_ids=coconut_token_ids,
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            data_collator=data_collator,
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
+        )
+    else:
+        trainer = Trainer(
+            model=model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            data_collator=data_collator,
+            callbacks=[EarlyStoppingCallback(early_stopping_patience=5)],
+        )
 
     if training_args.local_rank == 0:
         print(f"\\nTrainer eval_strategy: {trainer.args.eval_strategy}")

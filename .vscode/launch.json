@@ -1,0 +1,364 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        // ==================== Step 0: Setup Environment ====================
+        // NOTE: setup_conda_env.sh 是纯 Shell 环境配置脚本，无法转为 Python 命令，保留 bash 方式
+        {
+            "name": "Step 0: Setup Conda Environment",
+            "type": "node",
+            "request": "launch",
+            "runtimeExecutable": "bash",
+            "runtimeArgs": ["${workspaceFolder}/setup_conda_env.sh"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}"
+        },
+
+        // ==================== Step 1: Obtain Base Model ====================
+        {
+            "name": "Step 1a: Download Qwen3-1.7B Base Model",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/basemodel/download_basemodel.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/basemodel"
+        },
+        {
+            "name": "Step 1b: Expand Vocabulary (SID Tokens)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/basemodel/expand_vocab.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/basemodel"
+        },
+
+        // ==================== Step 2: Generate Alignment Training Data ====================
+        {
+            "name": "Step 2: Generate Alignment Training Data",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data/generate_training_data.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/data"
+        },
+
+        // ==================== Step 3: Itemic Alignment Fine-tuning & Merge ====================
+        // 展开自 train/run_training_stage1.sh → deepspeed train_beauty_align.py
+        {
+            "name": "Step 3a: Itemic Alignment Training (DeepSpeed)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "deepspeed",
+            "args": [
+                "--num_gpus", "6",
+                "./scripts/train_beauty_align.py",
+                "--model_dir", "../basemodel/Qwen3-1-7B-expand",
+                "--train_data_path", "../data/training_align_data_train.parquet",
+                "--val_data_path", "../data/training_align_data_val.parquet",
+                "--per_device_train_batch_size", "2",
+                "--gradient_accumulation_steps", "4",
+                "--num_train_epochs", "15",
+                "--gradient_checkpointing", "True",
+                "--bf16", "True",
+                "--deepspeed", "./scripts/ds_config_zero3_offload.json",
+                "--output_dir", "./results/beauty_align",
+                "--logging_dir", "./logs/beauty_sid_align",
+                "--logging_steps", "10",
+                "--eval_strategy", "epoch",
+                "--eval_on_start", "False",
+                "--save_strategy", "epoch",
+                "--save_total_limit", "15",
+                "--metric_for_best_model", "eval_loss",
+                "--greater_is_better", "False",
+                "--load_best_model_at_end", "True",
+                "--optim", "adamw_torch",
+                "--learning_rate", "1e-4",
+                "--warmup_ratio", "0.0",
+                "--weight_decay", "0.0",
+                "--adam_beta1", "0.9",
+                "--adam_beta2", "0.999",
+                "--adam_epsilon", "1e-8",
+                "--max_grad_norm", "1.0",
+                "--dataloader_num_workers", "4",
+                "--remove_unused_columns", "False"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/train"
+        },
+        {
+            "name": "Step 3b: Merge LoRA Checkpoint into Base Model",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/basemodel/merge_model.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/basemodel"
+        },
+
+        // ==================== Step 4: Prepare Recommendation Training Corpora ====================
+        {
+            "name": "Step 4a: Generate SID Prediction Data",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data/generate_sid_prediction_data.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/data"
+        },
+        {
+            "name": "Step 4b: Generate Reasoning Activation (RA) Data",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/data/generate_RA_data.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/data"
+        },
+
+        // ==================== Step 5: Combined Training Pipeline ====================
+        // NOTE: run_training_stage2.sh 是编排脚本，先运行 Rec Training，再运行 RA Training
+        // 请按顺序分别运行 Step 6 和 Step 7 即可达到相同效果
+
+        // ==================== Step 6: Recommendation Training ====================
+        // 展开自 train/scripts/run_training_rec.sh → deepspeed train_beauty_sid_rec.py
+        {
+            "name": "Step 6: Recommendation Training (DeepSpeed)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "deepspeed",
+            "args": [
+                "--include", "localhost:0,2,3,4,5",
+                "./scripts/train_beauty_sid_rec.py",
+                "--model_name_or_path", "../basemodel/Qwen3-1-7B-expand",
+                "--train_data_path", "../data/training_prediction_sid_data_train.parquet",
+                "--val_data_path", "../data/training_prediction_sid_data_val.parquet",
+                "--use_lora", "False",
+                "--per_device_train_batch_size", "2",
+                "--num_train_epochs", "6",
+                "--gradient_checkpointing", "True",
+                "--bf16", "True",
+                "--deepspeed", "./scripts/ds_config_zero2.json",
+                "--output_dir", "./results/beauty_sid_rec",
+                "--logging_dir", "./logs/beauty_sid_rec",
+                "--logging_steps", "10",
+                "--eval_strategy", "epoch",
+                "--eval_on_start", "False",
+                "--save_strategy", "epoch",
+                "--save_total_limit", "10",
+                "--metric_for_best_model", "eval_loss",
+                "--greater_is_better", "False",
+                "--load_best_model_at_end", "True",
+                "--optim", "adamw_torch",
+                "--learning_rate", "1e-5",
+                "--warmup_ratio", "0.1",
+                "--weight_decay", "0.01",
+                "--adam_beta1", "0.9",
+                "--adam_beta2", "0.999",
+                "--adam_epsilon", "1e-8",
+                "--max_grad_norm", "1.0",
+                "--dataloader_num_workers", "4",
+                "--remove_unused_columns", "False"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/train"
+        },
+
+        // ==================== Step 7: Reasoning Activation (RA) Training ====================
+        // 展开自 train/scripts/run_training_RA.sh → deepspeed train_beauty_RA.py
+        // NOTE: 原脚本包含 2 个 epoch 循环 + 数据重构。以下为单 epoch 训练配置
+        // model_name_or_path 需替换为实际的 Rec checkpoint 路径
+        {
+            "name": "Step 7a: RA Training Epoch 1 (DeepSpeed)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "deepspeed",
+            "args": [
+                "--num_gpus", "6",
+                "./scripts/train_beauty_RA.py",
+                "--model_name_or_path", "./results/beauty_sid_rec/checkpoint-XXXX",
+                "--use_lora", "False",
+                "--per_device_train_batch_size", "2",
+                "--num_train_epochs", "1",
+                "--gradient_checkpointing", "True",
+                "--bf16", "True",
+                "--deepspeed", "./scripts/ds_config_zero2.json",
+                "--output_dir", "./results/ReasoningActivation/epoch_1",
+                "--logging_dir", "./results/ReasoningActivation/epoch_1",
+                "--data_path", "../data/training_RA_train.parquet",
+                "--logging_steps", "1",
+                "--eval_strategy", "no",
+                "--eval_on_start", "False",
+                "--save_strategy", "epoch",
+                "--save_total_limit", "1",
+                "--load_best_model_at_end", "False",
+                "--optim", "adamw_torch",
+                "--learning_rate", "1e-5",
+                "--warmup_ratio", "0.1",
+                "--weight_decay", "0.01",
+                "--adam_beta1", "0.9",
+                "--adam_beta2", "0.999",
+                "--adam_epsilon", "1e-8",
+                "--max_grad_norm", "1.0",
+                "--dataloader_num_workers", "4",
+                "--remove_unused_columns", "False"
+            ],
+            "env": {
+                "CONFIG_NAME": "ReasoningActivation",
+                "TOKENIZERS_PARALLELISM": "false"
+            },
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/train"
+        },
+        // RA epoch 间数据重构步骤
+        {
+            "name": "Step 7b: RA Data Reconstruction (between epochs)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/train/scripts/reconstruct_data_parallel.py",
+            "args": [
+                "./results/ReasoningActivation/epoch_1",
+                "../data/training_RA_train.parquet",
+                "ReasoningActivation",
+                "1",
+                "6",
+                "2"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/train"
+        },
+        {
+            "name": "Step 7c: RA Training Epoch 2 (DeepSpeed)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "deepspeed",
+            "args": [
+                "--num_gpus", "6",
+                "./scripts/train_beauty_RA.py",
+                "--model_name_or_path", "./results/ReasoningActivation/epoch_1",
+                "--use_lora", "False",
+                "--per_device_train_batch_size", "2",
+                "--num_train_epochs", "1",
+                "--gradient_checkpointing", "True",
+                "--bf16", "True",
+                "--deepspeed", "./scripts/ds_config_zero2.json",
+                "--output_dir", "./results/ReasoningActivation/epoch_2",
+                "--logging_dir", "./results/ReasoningActivation/epoch_2",
+                "--data_path", "./results/ReasoningActivation/epoch_1/reconstructed_data.parquet",
+                "--logging_steps", "1",
+                "--eval_strategy", "no",
+                "--eval_on_start", "False",
+                "--save_strategy", "epoch",
+                "--save_total_limit", "1",
+                "--load_best_model_at_end", "False",
+                "--optim", "adamw_torch",
+                "--learning_rate", "1e-5",
+                "--warmup_ratio", "0.1",
+                "--weight_decay", "0.01",
+                "--adam_beta1", "0.9",
+                "--adam_beta2", "0.999",
+                "--adam_epsilon", "1e-8",
+                "--max_grad_norm", "1.0",
+                "--dataloader_num_workers", "4",
+                "--remove_unused_columns", "False"
+            ],
+            "env": {
+                "CONFIG_NAME": "ReasoningActivation",
+                "TOKENIZERS_PARALLELISM": "false"
+            },
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/train"
+        },
+
+        // ==================== Step 8: Evaluate Models ====================
+        // 展开自 test/eval_parallel_8gpu.sh 和 eval_parallel_8gpu_cot.sh
+        // 预计算 Trie 树（评估前需先运行一次）
+        {
+            "name": "Step 8-pre: Precompute Global Trie (Rec)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/precompute_global_trie.py",
+            "args": [
+                "--test_parquet_file", "../data/training_prediction_sid_data_test.parquet",
+                "--model_path", "../train/results/beauty_sid_rec",
+                "--output_file", "./exact_trie.pkl"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/test"
+        },
+        // 单 GPU 评估推荐模型（原脚本为多 GPU 并行，此处为单 GPU 调试配置）
+        {
+            "name": "Step 8a: Evaluate Direct Rec Model (Single GPU)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/test_model_hitrate.py",
+            "args": [
+                "--merged_model_path", "../train/results/beauty_sid_rec",
+                "--additional_lora_path", "",
+                "--test_parquet_file", "../data/training_prediction_sid_data_test.parquet",
+                "--global_trie_file", "./exact_trie.pkl",
+                "--test_batch_size", "4",
+                "--num_beams", "10",
+                "--metrics", "hit@1,hit@5,hit@10,ndcg@5,ndcg@10",
+                "--max_new_tokens", "6",
+                "--temperature", "0.6",
+                "--top_p", "1",
+                "--think_max_tokens", "0",
+                "--print_generations",
+                "--sample_num", "22363",
+                "--sample_offset", "0",
+                "--gpu_id", "0"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "TOKENIZERS_PARALLELISM": "false",
+                "OMP_NUM_THREADS": "4"
+            },
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/test"
+        },
+        // 预计算 Trie 树（CoT 评估用）
+        {
+            "name": "Step 8-pre: Precompute Global Trie (CoT)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/precompute_global_trie.py",
+            "args": [
+                "--test_parquet_file", "../data/training_RA_test.parquet",
+                "--model_path", "../train/results/ReasoningActivation/epoch_2/checkpoint-125",
+                "--output_file", "./exact_trie.pkl"
+            ],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/test"
+        },
+        // 单 GPU 评估 CoT 模型（原脚本为 8 GPU 并行，此处为单 GPU 调试配置）
+        {
+            "name": "Step 8b: Evaluate CoT Model (Single GPU)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test/test_model_hitrate_cot.py",
+            "args": [
+                "--merged_model_path", "../train/results/ReasoningActivation/epoch_2/checkpoint-125",
+                "--additional_lora_path", "",
+                "--test_parquet_file", "../data/training_RA_test.parquet",
+                "--global_trie_file", "./exact_trie.pkl",
+                "--test_batch_size", "4",
+                "--num_thinking_samples", "5",
+                "--num_beams_per_sample", "10",
+                "--metrics", "hit@1,hit@5,hit@10,ndcg@5,ndcg@10",
+                "--think_max_tokens", "128",
+                "--sid_max_tokens", "8",
+                "--think_temperature", "1.5",
+                "--think_top_p", "0.95",
+                "--sid_temperature", "0.6",
+                "--sid_top_p", "1",
+                "--print_generations",
+                "--sample_num", "22363",
+                "--sample_offset", "0",
+                "--gpu_id", "0"
+            ],
+            "env": {
+                "CUDA_VISIBLE_DEVICES": "0",
+                "TOKENIZERS_PARALLELISM": "false",
+                "OMP_NUM_THREADS": "4"
+            },
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}/test"
+        }
+    ]
+}

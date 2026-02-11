@@ -1,6 +1,6 @@
 *logs*/
 *.pkl
-.vscode/
+# .vscode/
 basemodel/
 *.parquet
 *results/
